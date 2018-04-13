@@ -8,4 +8,6 @@ logs/meowth.log
 __pychache__/
 *.py[cod]
 
+# Files for unittesting
 .pytest_cache
+.coverage
