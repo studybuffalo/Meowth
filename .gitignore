@@ -7,3 +7,5 @@ data/serverdict
 logs/meowth.log
 __pychache__/
 *.py[cod]
+
+.pytest_cache
