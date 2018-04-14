@@ -1,7 +1,7 @@
 
 from discord.ext import commands
 import discord.utils
-import errors
+import utils.errors
 
 def is_owner_check(ctx):
     author = ctx.author.id

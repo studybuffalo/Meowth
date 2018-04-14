@@ -15,209 +15,64 @@ import copy
 import functools
 import textwrap
 from time import strftime
-from logs import init_loggers
 import discord
 from discord.ext import commands
-import spelling
-from PIL import Image
-from PIL import ImageFilter
-from PIL import ImageEnhance
-import pytesseract
+from PIL import Image, ImageFilter, ImageEnhance
 import aiohttp
+import io
 from io import BytesIO
-import checks
 import hastebin
 from operator import itemgetter
-from errors import custom_error_handling
 import dateparser
-import io
 import traceback
 from contextlib import redirect_stdout
-tessdata_dir_config = "--tessdata-dir 'C:\\Program Files (x86)\\Tesseract-OCR\\tessdata' "
-xtraconfig = '-l eng -c tessedit_char_blacklist=&|=+%#^*[]{};<> -psm 6'
-if os.name == 'nt':
-    tesseract_config = tessdata_dir_config + xtraconfig
-else:
-    tesseract_config = xtraconfig
+
+from logs import init_loggers
+
+from setup.utils import _get_prefix, retrieve_server_dict, load_config
+from utils.errors import custom_error_handling
+import utils.spelling as spelling
+import utils.checks as checks
+from utils.get_details import (
+    get_type, get_name, get_number, get_level, get_raidlist, get_weaknesses,
+    weakness_to_str
+)
+
+
+# Setup logging
 logger = init_loggers()
 
-
-def _get_prefix(bot, message):
-    guild = message.guild
-    try:
-        set_prefix = bot.guild_dict[guild.id]['prefix']
-    except (KeyError, AttributeError):
-        set_prefix = None
-    default_prefix = bot.config['default_prefix']
-    return set_prefix or default_prefix
-
+# Setup
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 Meowth = commands.Bot(command_prefix=_get_prefix)
 custom_error_handling(Meowth, logger)
-try:
-    with open(os.path.join('data', 'serverdict'), 'rb') as fd:
-        Meowth.guild_dict = pickle.load(fd)
-    logger.info('Serverdict Loaded Successfully')
-except OSError:
-    logger.info('Serverdict Not Found - Looking for Backup')
-    try:
-        with open(os.path.join('data', 'serverdict_backup'), 'rb') as fd:
-            Meowth.guild_dict = pickle.load(fd)
-        logger.info('Serverdict Backup Loaded Successfully')
-    except OSError:
-        logger.info('Serverdict Backup Not Found - Creating New Serverdict')
-        Meowth.guild_dict = {
 
-        }
-        with open(os.path.join('data', 'serverdict'), 'wb') as fd:
-            pickle.dump(Meowth.guild_dict, fd, (- 1))
-        logger.info('Serverdict Created')
-
-
-guild_dict = Meowth.guild_dict
-
-
-config = {}
-pkmn_info = {}
-type_chart = {}
-type_list = []
-raid_info = {}
-
+# Setup guild_dict
+guild_dict = retrieve_server_dict()
+Meowth.guild_dict = guild_dict
 
 active_raids = []
 # Append path of this script to the path of
 # config files which we're loading.
 # Assumes that config files will always live in the same directory.
 script_path = os.path.dirname(os.path.realpath(__file__))
+
 """
 Helper functions
 """
 
+# Load Configuration Details
+config_details = load_config()
+config = config_details['config']
+pkmn_info = config_details['pkmn_info']
+type_chart = config_details['type_chart']
+type_list = config_details['type_list']
+raid_info = config_details['raid_info']
 
-def load_config():
-    global config
-    global pkmn_info
-    global type_chart
-    global type_list
-    global raid_info
-    # Load configuration
-    with open('config.json', 'r') as fd:
-        config = json.load(fd)
-    # Set up message catalog access
-    language = gettext.translation('meowth', localedir='locale', languages=[
-                                   config['bot-language']])
-    language.install()
-    pokemon_language = [config['pokemon-language']]
-    pokemon_path_source = os.path.join(
-        'locale', '{0}', 'pkmn.json').format(config['pokemon-language'])
-    # Load Pokemon list and raid info
-    with open(pokemon_path_source, 'r') as fd:
-        pkmn_info = json.load(fd)
-    with open(os.path.join('data', 'raid_info.json'), 'r') as fd:
-        raid_info = json.load(fd)
-    # Load type information
-    with open(os.path.join('data', 'type_chart.json'), 'r') as fd:
-        type_chart = json.load(fd)
-    with open(os.path.join('data', 'type_list.json'), 'r') as fd:
-        type_list = json.load(fd)
-    # Set spelling dictionary to our list of Pokemon
-    spelling.set_dictionary(pkmn_info['pokemon_list'])
-
-
-load_config()
 Meowth.config = config
 
-# Given a Pokemon name, return a list of its
-# weaknesses as defined in the type chart
 
-
-def get_type(guild, pkmn_number):
-    pkmn_number = int(pkmn_number) - 1
-    types = type_list[pkmn_number]
-    ret = []
-    for type in types:
-        ret.append(parse_emoji(guild, config['type_id_dict'][type.lower()]))
-    return ret
-
-
-def get_name(pkmn_number):
-    pkmn_number = int(pkmn_number) - 1
-    name = pkmn_info['pokemon_list'][pkmn_number].capitalize()
-    return name
-
-
-def get_number(pkm_name):
-    number = pkmn_info['pokemon_list'].index(pkm_name) + 1
-    return number
-
-
-def get_level(pkmn):
-    if str(pkmn).isdigit():
-        pkmn_number = pkmn
-    elif (not str(pkmn).isdigit()):
-        pkmn_number = get_number(pkmn)
-    for level in raid_info['raid_eggs']:
-        for pokemon in raid_info['raid_eggs'][level]['pokemon']:
-            if pokemon == pkmn_number:
-                return level
-
-
-def get_raidlist():
-    raidlist = []
-    for level in raid_info['raid_eggs']:
-        for pokemon in raid_info['raid_eggs'][level]['pokemon']:
-            raidlist.append(pokemon)
-            raidlist.append(get_name(pokemon).lower())
-    return raidlist
-
-# Given a Pokemon name, return a list of its
-# weaknesses as defined in the type chart
-
-
-def get_weaknesses(species):
-    # Get the Pokemon's number
-    number = pkmn_info['pokemon_list'].index(species)
-    # Look up its type
-    pk_type = type_list[number]
-
-    # Calculate sum of its weaknesses
-    # and resistances.
-    # -2 == immune
-    # -1 == NVE
-    #  0 == neutral
-    #  1 == SE
-    #  2 == double SE
-    type_eff = {}
-    for type in pk_type:
-        for atk_type in type_chart[type]:
-            if atk_type not in type_eff:
-                type_eff[atk_type] = 0
-            type_eff[atk_type] += type_chart[type][atk_type]
-    ret = []
-    for (type, effectiveness) in sorted(type_eff.items(), key=(lambda x: x[1]), reverse=True):
-        if effectiveness == 1:
-            ret.append(type.lower())
-        elif effectiveness == 2:
-            ret.append(type.lower() + 'x2')
-    return ret
-
-# Given a list of weaknesses, return a
-# space-separated string of their type IDs,
-# as defined in the type_id_dict
-
-
-def weakness_to_str(guild, weak_list):
-    ret = ''
-    for weakness in weak_list:
-
-        x2 = ''
-        if weakness[(- 2):] == 'x2':
-            weakness = weakness[:(- 2)]
-            x2 = 'x2'
-        # Append to string
-        ret += (parse_emoji(guild,
-                config['type_id_dict'][weakness]) + x2) + ' '
-    return ret
 
 # Convert an arbitrary string into something which
 # is acceptable as a Discord channel name.
